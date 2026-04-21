@@ -1,0 +1,6 @@
+{
+  "name": "AI86.PRO Batch Image Studio",
+  "description": "Generate multiple images from a list of prompts or uploaded files (txt, excel) using the AI86.PRO API (Powered by Beeknoee). Supports various models, sizes, and aspect ratios.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
