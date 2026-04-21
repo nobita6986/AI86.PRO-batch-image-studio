@@ -27,7 +27,7 @@ async function startServer() {
         return res.status(500).json({ error: "API Key (BEEKNOEE_API_KEY) is not configured" });
       }
 
-      // Strictly limit to the two allowed models or safe default
+      // Strictly limit to the allowed models or safe default
       const allowedModels = ["imagen-4.0-fast-generate-001", "imagen-3.0-fast-generate-002"];
       const targetModel = allowedModels.includes(model) ? model : "imagen-4.0-fast-generate-001";
 
@@ -35,7 +35,8 @@ async function startServer() {
         model: targetModel,
         prompt,
         n: 1,
-        size: size || "1024x1024"
+        size: size || "1024x1024",
+        seed: Math.floor(Math.random() * 2147483647) // Generate a random integer seed
       };
 
       // Handle Image References (Style & Character/Subject)

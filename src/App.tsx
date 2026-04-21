@@ -15,12 +15,15 @@ import {
   ExternalLink,
   Info,
   Palette,
-  User
+  User,
+  RefreshCcw,
+  Archive
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useDropzone } from 'react-dropzone';
 import * as XLSX from 'xlsx';
 import axios from 'axios';
+import JSZip from 'jszip';
 import { cn } from './lib/utils';
 
 interface GeneratedImage {
@@ -47,7 +50,7 @@ const RATIOS = [
 export default function App() {
   const [prompts, setPrompts] = useState<string>('');
   const [selectedModel, setSelectedModel] = useState(MODELS[0].id);
-  const [selectedRatio, setSelectedRatio] = useState(RATIOS[0].id);
+  const [selectedRatio, setSelectedRatio] = useState('16:9');
   const [images, setImages] = useState<GeneratedImage[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -127,6 +130,38 @@ export default function App() {
     multiple: true
   });
 
+  const generateOne = async (id: string, prompt: string) => {
+    const size = RATIOS.find(r => r.id === selectedRatio)?.size || '1024x1024';
+    
+    setImages(prev => prev.map(img => img.id === id ? { ...img, status: 'processing', error: undefined } : img));
+    
+    try {
+      const response = await axios.post('/api/generate', {
+        prompt,
+        model: selectedModel,
+        size: size,
+        style_ref: styleRef,
+        character_ref: characterRef
+      });
+
+      const imageUrl = response.data.data?.[0]?.url || response.data.url;
+      if (!imageUrl) throw new Error("No image URL returned");
+
+      setImages(prev => prev.map(img => 
+        img.id === id ? { ...img, url: imageUrl, status: 'completed' } : img
+      ));
+    } catch (error: any) {
+      console.error("Task failed:", error);
+      setImages(prev => prev.map(img => 
+        img.id === id ? { 
+          ...img, 
+          status: 'error', 
+          error: error.response?.data?.error?.message || error.message || 'Request failed' 
+        } : img
+      ));
+    }
+  };
+
   const handleGenerate = async () => {
     const lines = prompts.split('\n').map(p => p.trim()).filter(p => p.length > 0);
     if (lines.length === 0) return;
@@ -144,40 +179,59 @@ export default function App() {
 
     setImages(prev => [...newGenerations, ...prev]);
 
-    const size = RATIOS.find(r => r.id === selectedRatio)?.size || '1024x1024';
-
     for (let i = 0; i < newGenerations.length; i++) {
-      const gen = newGenerations[i];
-      
-      setImages(prev => prev.map(img => img.id === gen.id ? { ...img, status: 'processing' } : img));
-      
-      try {
-        const response = await axios.post('/api/generate', {
-          prompt: gen.prompt,
-          model: selectedModel,
-          size: size,
-          style_ref: styleRef,
-          character_ref: characterRef
-        });
-
-        const imageUrl = response.data.data?.[0]?.url || response.data.url;
-        
-        if (!imageUrl) throw new Error("No image URL returned");
-
-        setImages(prev => prev.map(img => img.id === gen.id ? { ...img, url: imageUrl, status: 'completed' } : img));
-      } catch (error: any) {
-        console.error("Task failed:", error);
-        setImages(prev => prev.map(img => img.id === gen.id ? { 
-          ...img, 
-          status: 'error', 
-          error: error.response?.data?.error?.message || error.message || "Request failed"
-        } : img));
-      }
-
+      await generateOne(newGenerations[i].id, newGenerations[i].prompt);
       setProgress(Math.round(((i + 1) / newGenerations.length) * 100));
     }
-
     setIsProcessing(false);
+  };
+
+  const retryImage = async (img: GeneratedImage) => {
+    if (isProcessing) return;
+    setIsProcessing(true);
+    await generateOne(img.id, img.prompt);
+    setIsProcessing(false);
+  };
+
+  const retryAllErrors = async () => {
+    if (isProcessing) return;
+    const errorImages = images.filter(img => img.status === 'error');
+    if (errorImages.length === 0) return;
+
+    setIsProcessing(true);
+    setProgress(0);
+    for (let i = 0; i < errorImages.length; i++) {
+      await generateOne(errorImages[i].id, errorImages[i].prompt);
+      setProgress(Math.round(((i + 1) / errorImages.length) * 100));
+    }
+    setIsProcessing(false);
+  };
+
+  const downloadAll = async () => {
+    const completedImages = images.filter(img => img.status === 'completed' && img.url);
+    if (completedImages.length === 0) return;
+
+    const zip = new JSZip();
+    const folder = zip.folder("ai86pro-exported-images");
+
+    for (let i = 0; i < completedImages.length; i++) {
+        const img = completedImages[i];
+        try {
+            const response = await fetch(img.url);
+            const blob = await response.blob();
+            folder?.file(`${img.id}-${i}.png`, blob);
+        } catch (e) {
+            console.error("Failed to download image for zip:", e);
+        }
+    }
+
+    const zipContent = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(zipContent);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `ai86pro-images-${Date.now()}.zip`;
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const removeImage = (id: string) => {
@@ -362,10 +416,29 @@ export default function App() {
                 <div className="w-2 h-2 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.6)]" />
                 <h2 className="text-[10px] font-bold uppercase tracking-widest text-zinc-300">Observation Deck / Output Matrix</h2>
              </div>
-             <div className="flex items-center gap-4 text-[10px] font-mono text-zinc-500">
-                <span>ACTIVE_STREAMS: {images.filter(i => i.status === 'processing').length}</span>
-                <span className="text-zinc-800">|</span>
-                <span>TOTAL_ASSETS: {images.length}</span>
+             <div className="flex items-center gap-2">
+                {images.some(img => img.status === 'error') && (
+                  <button 
+                    onClick={retryAllErrors}
+                    disabled={isProcessing}
+                    className="px-3 py-1 bg-red-500/10 text-red-500 border border-red-500/20 rounded text-[9px] uppercase font-bold flex items-center gap-2 hover:bg-red-500/20 transition-all disabled:opacity-50"
+                  >
+                    <RefreshCcw size={10} /> Retry All Errors
+                  </button>
+                )}
+                {images.some(img => img.status === 'completed') && (
+                  <button 
+                    onClick={downloadAll}
+                    className="px-3 py-1 bg-blue-500/10 text-blue-500 border border-blue-500/20 rounded text-[9px] uppercase font-bold flex items-center gap-2 hover:bg-blue-500/20 transition-all"
+                  >
+                    <Archive size={10} /> Download All (.zip)
+                  </button>
+                )}
+                <div className="flex items-center gap-4 text-[10px] font-mono text-zinc-500 ml-4">
+                   <span>ACTIVE_STREAMS: {images.filter(i => i.status === 'processing').length}</span>
+                   <span className="text-zinc-800">|</span>
+                   <span>TOTAL_ASSETS: {images.length}</span>
+                </div>
              </div>
           </div>
           
@@ -407,9 +480,21 @@ export default function App() {
 
                         {img.status === 'error' && (
                           <div className="absolute inset-0 z-30 bg-red-900/10 flex flex-col items-center justify-center p-8 text-center backdrop-blur-sm">
-                             <XCircle size={32} className="text-red-500 mb-4" />
+                             <XCircle size={32} className="text-red-500 mb-2" />
                              <p className="text-[10px] font-bold text-red-500 uppercase tracking-[0.2em]">Matrix Corruption</p>
-                             <p className="text-[9px] text-red-400/60 font-mono mt-2 line-clamp-2 uppercase">{img.error}</p>
+                             <p className="text-[9px] text-red-400/60 font-mono mt-2 mb-4 line-clamp-2 uppercase">{img.error}</p>
+                             <button 
+                               onClick={() => retryImage(img)}
+                               className="px-4 py-2 bg-red-500 text-white rounded-lg text-[10px] font-bold uppercase flex items-center gap-2 hover:bg-red-600 transition-colors"
+                             >
+                               <RefreshCcw size={12} /> Retry Node
+                             </button>
+                             <button 
+                               onClick={() => removeImage(img.id)}
+                               className="mt-2 text-[9px] text-zinc-500 hover:text-white uppercase font-bold transition-colors"
+                             >
+                               Discard
+                             </button>
                           </div>
                         )}
 
