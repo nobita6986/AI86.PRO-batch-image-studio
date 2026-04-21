@@ -4,6 +4,10 @@ import path from "path";
 import { fileURLToPath } from "url";
 import axios from "axios";
 import dotenv from "dotenv";
+import { EventEmitter } from 'events';
+
+// Prevent MaxListenersExceededWarning
+EventEmitter.defaultMaxListeners = 50;
 
 dotenv.config();
 
@@ -14,12 +18,12 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json({ limit: '10mb' }));
+  app.use(express.json({ limit: '50mb' }));
 
   // API Route for Image Generation (Proxy to AI86.PRO / Beeknoee)
   app.post("/api/generate", async (req, res) => {
     try {
-      const { prompt, model, size, style_ref, character_ref } = req.body;
+      const { prompt, model, size, ratio, style_ref, character_ref } = req.body;
       const apiKey = process.env.BEEKNOEE_API_KEY;
 
       if (!apiKey) {
@@ -28,31 +32,46 @@ async function startServer() {
       }
 
       // Strictly limit to the allowed models or safe default
-      const allowedModels = ["imagen-4.0-fast-generate-001", "imagen-3.0-fast-generate-002"];
+      const allowedModels = [
+        "imagen-4.0-fast-generate-001", 
+        "imagen-3.0-fast-generate-002",
+        "flux-1-dev",
+        "flux-1-schnell",
+        "stability-ai/stable-diffusion-3",
+        "dall-e-3"
+      ];
       const targetModel = allowedModels.includes(model) ? model : "imagen-4.0-fast-generate-001";
 
+      const randomSeed = Math.floor(Math.random() * 1000000);
+      
       const payload: any = {
         model: targetModel,
-        prompt,
+        prompt: prompt,
         n: 1,
-        size: size || "1024x1024",
-        seed: Math.floor(Math.random() * 2147483647) // Generate a random integer seed
+        // For KIE-based models, specific parameters often need to be in a nested object
+        parameters: {
+          seed: randomSeed,
+        }
       };
 
-      // Handle Image References (Style & Character/Subject)
-      // Beeknoee supports style_reference and subject_reference for Imagen models
-      if (style_ref && style_ref.length < 5000000) { // Safety limit: 5MB
-          payload.style_reference = {
-            image: style_ref.includes(',') ? style_ref.split(',')[1] : style_ref
-          };
-      }
-      if (character_ref && character_ref.length < 5000000) { // Safety limit: 5MB
-          payload.subject_reference = {
-            image: character_ref.includes(',') ? character_ref.split(',')[1] : character_ref
-          };
+      // Model-specific logic for Dimensions/Ratio
+      if (targetModel.includes('imagen-4.0') || targetModel.includes('flux')) {
+          payload.parameters.aspect_ratio = ratio || "16:9";
+      } else {
+          // For legacy models, we might still need seed/size at root
+          payload.seed = randomSeed;
+          payload.size = size || "1024x1024";
       }
 
-      console.log(`[AI86.PRO] Generating image with model: ${targetModel}`);
+      // Handle Image References
+      if (style_ref && style_ref.length < 5000000) {
+          payload.style_reference = { image: style_ref.includes(',') ? style_ref.split(',')[1] : style_ref };
+      }
+      if (character_ref && character_ref.length < 5000000) {
+          payload.subject_reference = { image: character_ref.includes(',') ? character_ref.split(',')[1] : character_ref };
+      }
+
+      console.log(`[AI86.PRO] Requesting: ${targetModel} | Seed: ${randomSeed} | Payload: ${JSON.stringify({ ...payload, prompt: payload.prompt?.substring(0, 50) + "..." })}`);
 
       const response = await axios.post(
         "https://platform.beeknoee.com/api/v1/image/generations",
@@ -62,7 +81,7 @@ async function startServer() {
             "Authorization": `Bearer ${apiKey}`,
             "Content-Type": "application/json",
           },
-          timeout: 60000, // 60s timeout for generation
+          timeout: 60000,
         }
       );
 

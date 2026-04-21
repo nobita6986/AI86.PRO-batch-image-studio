@@ -11,6 +11,7 @@ import {
   XCircle,
   Settings2,
   ChevronRight,
+  ChevronDown,
   Copy,
   ExternalLink,
   Info,
@@ -36,8 +37,12 @@ interface GeneratedImage {
 }
 
 const MODELS = [
-  { id: 'imagen-4.0-fast-generate-001', name: 'Imagen 4 Fast', description: 'Advanced image generation model' },
-  { id: 'imagen-3.0-fast-generate-002', name: 'Imagen 3 Fast', description: 'Google Imagen 3 Fast, high-speed iteration' },
+  { id: 'imagen-4.0-fast-generate-001', name: 'Imagen 4 Fast', description: 'Advanced image generation model', price: 0.007 },
+  { id: 'imagen-3.0-fast-generate-002', name: 'Imagen 3 Fast', description: 'Google Imagen 3 Fast, high-speed iteration', price: 0.005 },
+  { id: 'flux-1-dev', name: 'Flux 1 Dev', description: 'High-quality open-weights model', price: 0.015 },
+  { id: 'flux-1-schnell', name: 'Flux 1 Schnell', description: 'Faster Flux model for quick iterations', price: 0.003 },
+  { id: 'stability-ai/stable-diffusion-3', name: 'SD 3', description: 'Stability AI Stable Diffusion 3', price: 0.02 },
+  { id: 'dall-e-3', name: 'DALL-E 3', description: 'OpenAI DALL-E 3 high quality', price: 0.04 },
 ];
 
 const RATIOS = [
@@ -56,6 +61,24 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [styleRef, setStyleRef] = useState<string | null>(null);
   const [characterRef, setCharacterRef] = useState<string | null>(null);
+
+  const [isRatioOpen, setIsRatioOpen] = useState(false);
+  const ratioRef = useRef<HTMLDivElement>(null);
+
+  // Close dropdown on outside click
+  React.useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (ratioRef.current && !ratioRef.current.contains(event.target as Node)) {
+        setIsRatioOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const getActivePrompts = () => prompts.split('\n').filter(p => p.trim());
+  const modelInfo = MODELS.find(m => m.id === selectedModel);
+  const totalPrice = (getActivePrompts().length * (modelInfo?.price || 0)).toFixed(3);
 
   const fileToDataURL = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -139,6 +162,7 @@ export default function App() {
       const response = await axios.post('/api/generate', {
         prompt,
         model: selectedModel,
+        ratio: selectedRatio,
         size: size,
         style_ref: styleRef,
         character_ref: characterRef
@@ -180,6 +204,10 @@ export default function App() {
     setImages(prev => [...newGenerations, ...prev]);
 
     for (let i = 0; i < newGenerations.length; i++) {
+      // Add a 9-second delay between requests to respect the 7req/min limit
+      if (i > 0) {
+        await new Promise(resolve => setTimeout(resolve, 9000));
+      }
       await generateOne(newGenerations[i].id, newGenerations[i].prompt);
       setProgress(Math.round(((i + 1) / newGenerations.length) * 100));
     }
@@ -290,30 +318,62 @@ export default function App() {
             </div>
           </section>
 
-          <section className="shrink-0">
+          <section className="shrink-0 relative" ref={ratioRef}>
             <label className="tech-label">Aspect Ratio</label>
-            <div className="grid grid-cols-2 gap-2">
-              {RATIOS.map(ratio => (
-                <button
-                  key={ratio.id}
-                  onClick={() => setSelectedRatio(ratio.id)}
-                  className={cn(
-                    "p-2 border rounded-lg flex flex-col items-center gap-1.5 transition-all glass-button",
-                    selectedRatio === ratio.id 
-                      ? "border-blue-500 bg-blue-500/10 text-blue-400" 
-                      : "border-white/5 bg-white/5 hover:border-white/20"
-                  )}
+            <button
+              onClick={() => setIsRatioOpen(!isRatioOpen)}
+              className="w-full flex items-center justify-between p-3 bg-white/5 border border-white/10 rounded-lg hover:bg-white/10 transition-all group"
+            >
+              <div className="flex items-center gap-3">
+                <div className={cn(
+                  "border border-blue-500/50 w-5 h-5 flex items-center justify-center p-0.5",
+                  selectedRatio === '1:1' ? "aspect-square" : 
+                  selectedRatio === '16:9' ? "aspect-video" : 
+                  selectedRatio === '9:16' ? "aspect-[9/16]" : "aspect-[4/3]"
+                )}>
+                  <div className="w-full h-full bg-blue-500/20" />
+                </div>
+                <span className="text-xs font-bold text-zinc-300 uppercase tracking-widest">{selectedRatio}</span>
+              </div>
+              <ChevronDown size={14} className={cn("text-zinc-500 transition-transform duration-200", isRatioOpen ? "rotate-180" : "")} />
+            </button>
+
+            <AnimatePresence>
+              {isRatioOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="absolute z-50 left-0 right-0 mt-1 bg-zinc-900 border border-white/10 rounded-lg shadow-2xl overflow-hidden"
                 >
-                  <div className={cn(
-                    "border border-current opacity-60",
-                    ratio.id === '1:1' ? "w-3 h-3" : 
-                    ratio.id === '16:9' ? "w-5 h-2.5" : 
-                    ratio.id === '9:16' ? "w-2.5 h-4.5" : "w-4 h-3"
-                  )} />
-                  <span className="text-[10px] font-bold">{ratio.id}</span>
-                </button>
-              ))}
-            </div>
+                  {RATIOS.map(ratio => (
+                    <button
+                      key={ratio.id}
+                      onClick={() => {
+                        setSelectedRatio(ratio.id);
+                        setIsRatioOpen(false);
+                      }}
+                      className={cn(
+                        "w-full p-3 flex items-center gap-3 hover:bg-white/5 transition-colors text-left",
+                        selectedRatio === ratio.id ? "bg-blue-500/10 text-blue-400" : "text-zinc-400"
+                      )}
+                    >
+                      <div className={cn(
+                        "border border-current opacity-40",
+                        ratio.id === '1:1' ? "w-3 h-3" : 
+                        ratio.id === '16:9' ? "w-5 h-2.5" : 
+                        ratio.id === '9:16' ? "w-2.5 h-4.5" : "w-4 h-3"
+                      )} />
+                      <div className="flex flex-col">
+                        <span className="text-[10px] font-bold uppercase">{ratio.id}</span>
+                        <span className="text-[8px] text-zinc-600 font-mono tracking-tighter">{ratio.name}</span>
+                      </div>
+                      {selectedRatio === ratio.id && <div className="ml-auto w-1 h-1 rounded-full bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)]" />}
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </section>
 
           <section className="shrink-0 flex flex-col gap-3">
@@ -405,6 +465,16 @@ export default function App() {
                 )}
                 <span>{isProcessing ? `${progress}%` : "Run Pipeline"}</span>
               </button>
+              
+              <div className="mt-2 p-2 rounded-lg bg-black/40 border border-white/5 flex flex-col gap-1">
+                <div className="flex justify-between items-center">
+                  <span className="text-[9px] font-bold text-zinc-500 uppercase tracking-tighter">Forecast Cost</span>
+                  <span className="text-[14px] font-mono font-bold text-emerald-500">${totalPrice}</span>
+                </div>
+                <div className="text-[8px] text-zinc-600 font-mono text-right uppercase tracking-tighter">
+                  {getActivePrompts().length} tasks × ${modelInfo?.price?.toFixed(3)}
+                </div>
+              </div>
             </div>
           </section>
         </aside>
